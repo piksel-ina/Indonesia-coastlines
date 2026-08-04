@@ -1,10 +1,9 @@
-import json
 import os
 import sys
 from collections import Counter, namedtuple
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Iterable, Tuple, Union
 
 import click
 import geopandas as gpd
@@ -95,7 +94,7 @@ def get_output_path(
     tile_id: str,
     dataset_name: str,
     extension: str,
-) -> Union[Path, S3Path]:
+) -> Path | S3Path:
     path = None
     if output_location.startswith("s3://"):
         path = S3Path(output_location.replace("s3:/", ""))
@@ -113,7 +112,7 @@ def get_output_path(
 
 def stac_load(
     geopolygon: Geometry, bands: Iterable[str], config: CoastlinesConfig
-) -> Tuple[xr.Dataset, dict[str, Suninfo]]:
+) -> tuple[xr.Dataset, dict[str, Suninfo]]:
     lower_limit = config.options.lower_scene_limit
     upper_limit = config.options.upper_scene_limit
 
@@ -129,7 +128,7 @@ def stac_load(
     }
     query_filter = {"landsat:collection_category": {"in": ["T1"]}}
     search = client.search(
-        filter=query_filter,
+        query=query_filter,
         **query,
     )
     n_items = search.matched()
@@ -177,8 +176,8 @@ def stac_load(
 
     suninfo_by_day = {
         item.datetime.strftime("%Y-%m-%d"): Suninfo(
-            elevation=item.properties["eo:cloud_coverage"],
-            azimuth=item.properties["eo:azimuth"],
+            elevation=item.properties["view:sun_elevation"],
+            azimuth=item.properties["view:sun_azimuth"],
         )
         for item in items
     }
@@ -197,44 +196,48 @@ def stac_load(
         fail_on_error=False,
     )
 
-    return ds, suninfo_by_day, items
-
+    return ds, suninfo_by_day
 
 def datacube_load(
     geopolygon: Geometry, bands: Iterable[str], config: CoastlinesConfig
 ) -> xr.Dataset:
     dc = Datacube()
-
     time_query = (
         f"{config.options.start_year - 1}-01-01T00:00Z",
         f"{config.options.end_year + 1}-12-31T23:59Z",
     )
 
-    datasets = dc.find_datasets(
+    all_datasets = dc.find_datasets(
         product=["ls5_c2l2_sr", "ls7_c2l2_sr", "ls8_c2l2_sr", "ls9_c2l2_sr"],
-        landsat_collection_category=["T1"],
         time=time_query,
         geopolygon=geopolygon,
     )
 
-    print(f"Found {len(datasets)} datasets")
+    def get_collection_category(dataset):
+        return dataset.metadata_doc.get("properties", {}).get(
+            "landsat:collection_category"
+        )
+
+    datasets = [ds for ds in all_datasets if get_collection_category(ds) == "T1"]
+    print(f"Found {len(datasets)} T1 datasets")
 
     if len(datasets) < config.options.lower_scene_limit:
         print(
             "Warning, not enough T1 datasets found, searching for T2 datasets as well"
         )
-        datasets += dc.find_datasets(
-            product=["ls5_c2l2_sr", "ls7_c2l2_sr", "ls8_c2l2_sr", "ls9_c2l2_sr"],
-            landsat_collection_category=["T2"],
-            time=time_query,
-            geopolygon=geopolygon,
-        )
+        t2_datasets = [
+            ds for ds in all_datasets if get_collection_category(ds) == "T2"
+        ]
+        print(f"Found {len(t2_datasets)} additional T2 datasets")
+        datasets += t2_datasets
+
+    print(f"Found {len(datasets)} datasets")
 
     if len(datasets) < config.options.lower_scene_limit:
         raise CoastlinesException(
             f"Found {len(datasets)} datasets, but need at least {config.options.lower_scene_limit}."
         )
-
+   
     epsg_codes = Counter(dataset.metadata_doc["crs"] for dataset in datasets)
     epsg_code = epsg_codes.most_common(1)[0][0]
 
@@ -252,6 +255,7 @@ def datacube_load(
         measurements=bands,
         output_crs=epsg_code,
         resolution=30,
+        align=(15,15),
         group_by="solar_day",
         patch_url=http_to_s3_url,
         dask_chunks={"x": 10000, "y": 10000, "time": 1},
@@ -296,7 +300,7 @@ def load_and_mask_data(
         )
     else:
         print("Loading with stac")
-        ds, suninfo_by_day, meta = stac_load(
+        ds, suninfo_by_day = stac_load(
             geopolygon=geopolygon, bands=bands, config=config
         )
 
@@ -532,7 +536,7 @@ def get_one_year_composite(
     water_index: str = "mndwi",
     include_nir: bool = False,
     debug: bool = False,
-) -> Tuple[int, xr.Dataset]:
+) -> tuple[int, xr.Dataset]:
     one_year = ds.sel(time=str(year))
     three_years = ds.sel(time=slice(str(year - 1), str(year + 1)))
 
@@ -737,7 +741,7 @@ def export_results(
 
 
 def process_coastlines(
-    config: dict,
+    config: CoastlinesConfig,
     study_area: str,
     output_version: str,
     output_location: str | None,
@@ -750,14 +754,8 @@ def process_coastlines(
     log.info(f"Loaded geometry for study area {study_area}")
 
     # Config shenanigans
-    bbox = tuple(
-        geometry.to_crs(config.output.crs)
-        .buffer(config.options.load_buffer_distance)
-        .to_crs("epsg:4326")
-        .bounds.values[0]
-    )
-    log.info(f"Using bounding box: {bbox}")
-    odc_geom = Geometry(json.loads(geometry.to_json()), crs=geometry.crs)
+    geometry_latlon = geometry.to_crs(config.output.crs).buffer(config.options.load_buffer_distance).to_crs("epsg:4326")
+    bbox = geometry_latlon.boundingbox.bbox
 
     # Either use the MNDWI index or the combined index
     log.info(f"Using water index: {config.options.water_index}")
@@ -765,7 +763,7 @@ def process_coastlines(
     # Loading data
     data, items = load_and_mask_data(
         config,
-        geopolygon=odc_geom,
+        geopolygon=geometry_latlon,
         include_nir=config.options.include_nir,
         use_datacube=config.use_datacube,
     )
@@ -851,7 +849,7 @@ def process_coastlines(
         geomorphology_url = "data/raw/empty_modifications.geojson"
     geomorphology_gdf = gpd.read_file(
         geomorphology_url,
-        mask=geometry,
+        mask=geometry_latlon,
     )
 
     log.info("Preprocessing contours")
@@ -899,10 +897,10 @@ def process_coastlines(
 
     # Clip to the study area
     points_with_certainty = points_with_certainty.clip(
-        geometry.to_crs(points_with_certainty.crs)
+        geometry.to_crs(points_with_certainty.crs).geom
     )
     contours_with_certainty = contours_with_certainty.clip(
-        geometry.to_crs(contours_with_certainty.crs)
+        geometry.to_crs(contours_with_certainty.crs).geom
     )
 
     # Write results
@@ -969,8 +967,8 @@ def cli(
     log.info("Checking configuration")
     if config.use_datacube is None:
         raise ValueError("datacube config must be provided in config file")
-    if config.stac is None:
-        raise ValueError("STAC config must be provided in config file")
+    if config.use_datacube is False and config.stac is None:
+        raise ValueError("STAC config must be provided in config file if use_datacube is set to False")
 
     if config.aws.aws_unsigned and config.aws.aws_request_payer:
         raise ValueError("Cannot set both aws_unsigned and aws_request_payer to True")
@@ -1004,8 +1002,8 @@ def cli(
             log,
             load_early=load_early,
         )
-    except CoastlinesException as e:
-        log.exception(f"Study area {study_area}: Failed to run process with error {e}")
+    except CoastlinesException:
+        log.exception(f"Study area {study_area}: Failed to run process with error")
         sys.exit(1)
 
 

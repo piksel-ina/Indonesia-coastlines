@@ -1,7 +1,6 @@
 import json
 import sys
 from json.decoder import JSONDecodeError
-from typing import Optional
 
 import click
 
@@ -18,7 +17,7 @@ def read_tiles_subset_string(tiles_subset: str) -> list:
 @click.option("--tiles-subset", type=str, default="[]")
 @click.option("--limit", type=int, default=None, required=False)
 def cli(
-    config_file: str, config_type: str, tiles_subset: str, limit: Optional[int]
+    config_file: str, config_type: str, tiles_subset: str, limit: int | None
 ) -> None:
     config = load_config(config_file, config_type)
     tiles = load_json(config.input.grid_path)
