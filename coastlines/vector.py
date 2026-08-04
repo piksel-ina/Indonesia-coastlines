@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
 # This code conducts vector subpixel shoreline extraction for DEA
 # Coastlines:
 #
@@ -13,7 +10,6 @@
 
 import glob
 import warnings
-from typing import Union
 
 import geohash
 import geopandas as gpd
@@ -111,7 +107,7 @@ def load_rasters(
 
             # Test if data was returned
             if len(paths) == 0:
-                raise Exception(
+                raise CoastlinesException(
                     f"No rasters found for grid cell {study_area} "
                     f"(raster version '{raster_version}'). Verify that "
                     f"`raster.py` has been run "
@@ -477,7 +473,7 @@ def contour_certainty(contours_gdf, certainty_masks):
 
 def points_certainty(
     points_gdf: GeoDataFrame,
-    geomorphology_gdf: Union[GeoDataFrame, None] = None,
+    geomorphology_gdf: GeoDataFrame | None = None,
     baseline_year: int = 2022,
     rocky_query: str | None = None,
     rate_of_change_threshold: int | None = 50,
@@ -718,9 +714,8 @@ def contours_preprocess(
     # Optionally modify the coastal mask using manually supplied
     # polygons to add missing areas of shoreline, or remove unwanted
     # areas from the mask.
-    if modifications_gdf is not None:
-        # Only proceed if there are polygons available
-        if len(modifications_gdf.index) > 0:
+    # Only proceed if there are polygons available AND the modifications GeoDataFrame is not empty
+    if modifications_gdf is not None and len(modifications_gdf.index) > 0:
             # Convert type column to integer, with 1 representing pixels
             # to add to the coastal mask (by setting them as "coastal"
             # pixels, and 2 representing pixels to remove from the mask
@@ -903,13 +898,14 @@ def annual_movements(
 
         # Find nearest point on comparison contour, and add these to points dataset
         points_gdf[f"p_{comp_year}"] = points_gdf.apply(
-            lambda x: nearest_points(x.p_baseline, comp_contour)[1], axis=1
+            lambda x, comp_contour=comp_contour: nearest_points(x.p_baseline, comp_contour)[1],
+            axis=1,
         )
 
         # Compute distance between baseline and comparison year points and add
         # this distance as a new field named by the current year being analysed
         distances = points_gdf.apply(
-            lambda x: x.geometry.distance(x[f"p_{comp_year}"]), axis=1
+            lambda x, comp_year=comp_year: x.geometry.distance(x[f"p_{comp_year}"]), axis=1
         )
 
         # Set any value over X m to NaN
@@ -1332,7 +1328,7 @@ def rocky_shoreline_flag(
     # each unique index value (i.e. True if there are both True and False)
     # to account for edge case where nearest geomorphology is the corner
     # of two vector features
-    return (joined["rocky"] == True).groupby(joined.index).max()  # noqa
+    return (joined["rocky"] == True).groupby(joined.index).max()
 
 
 def region_attributes(gdf, region_gdf, attribute_col="TERRITORY1", rename_col=False):
@@ -1509,7 +1505,7 @@ def generate_hotspots(
         # Compute coastal change rates by linearly regressing annual
         # movements vs. time
         rate_out = hotspot_values.apply(
-            lambda row: change_regress(
+            lambda row, x_years=x_years: change_regress(
                 y_vals=row.values.astype(float), x_vals=x_years, x_labels=x_years
             ),
             axis=1,

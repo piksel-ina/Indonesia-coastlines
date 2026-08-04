@@ -1,9 +1,9 @@
 import os
 import sys
 from collections import Counter, namedtuple
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Iterable, Tuple, Union
 
 import click
 import geopandas as gpd
@@ -94,7 +94,7 @@ def get_output_path(
     tile_id: str,
     dataset_name: str,
     extension: str,
-) -> Union[Path, S3Path]:
+) -> Path | S3Path:
     path = None
     if output_location.startswith("s3://"):
         path = S3Path(output_location.replace("s3:/", ""))
@@ -112,7 +112,7 @@ def get_output_path(
 
 def stac_load(
     geopolygon: Geometry, bands: Iterable[str], config: CoastlinesConfig
-) -> Tuple[xr.Dataset, dict[str, Suninfo]]:
+) -> tuple[xr.Dataset, dict[str, Suninfo]]:
     lower_limit = config.options.lower_scene_limit
     upper_limit = config.options.upper_scene_limit
 
@@ -536,7 +536,7 @@ def get_one_year_composite(
     water_index: str = "mndwi",
     include_nir: bool = False,
     debug: bool = False,
-) -> Tuple[int, xr.Dataset]:
+) -> tuple[int, xr.Dataset]:
     one_year = ds.sel(time=str(year))
     three_years = ds.sel(time=slice(str(year - 1), str(year + 1)))
 
@@ -1002,8 +1002,8 @@ def cli(
             log,
             load_early=load_early,
         )
-    except CoastlinesException as e:
-        log.exception(f"Study area {study_area}: Failed to run process with error {e}")
+    except CoastlinesException:
+        log.exception(f"Study area {study_area}: Failed to run process with error")
         sys.exit(1)
 
 
