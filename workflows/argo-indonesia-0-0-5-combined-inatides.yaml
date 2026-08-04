@@ -1,0 +1,187 @@
+---
+kind: Workflow
+metadata:
+  generateName: indonesia-coastlines-
+  namespace: argo-workflows
+spec:
+  serviceAccountName: argo-workflows-executor
+  entrypoint: coastlines-dag
+  parallelism: 120
+  podGC:
+    strategy: OnPodSuccess
+    deleteDelayDuration: 120s
+  podMetadata:
+    annotations:
+      karpenter.sh/do-not-disrupt: "true"
+  nodeSelector:
+    data-production: r8xlarge
+  tolerations:
+    - key: data-production
+      operator: Equal
+      value: r8xlarge
+      effect: NoSchedule
+  workflowMetadata:
+    labels:
+      app: indonesia-coastlines
+
+  volumes:
+    - name: efs-coastlines-data
+      persistentVolumeClaim:
+        claimName: efs-coastlines-data
+
+  arguments:
+    parameters:
+      - name: image-tag
+        value: "latest"
+      - name: result-version
+        value: "0.0.5-combined-inatides"
+        
+      - name: tiles-subset
+        # value: '[\"76,34\"]' # Can be [] for all tiles or '[\"1965,62\",\"1953,69\"]'
+        value: '[]' 
+        #value: '[\"93,20\",\"94,20\",\"95,20\",\"86,21\",\"87,21\",\"88,21\",\"89,21\",\"90,21\",\"91,21\",\"92,21\",\"93,21\",\"94,21\",\"95,21\",\"80,22\",\"81,22\",\"82,22\",\"83,22\",\"84,22\",\"85,22\",\"86,22\",\"91,22\",\"92,22\",\"93,22\",\"94,22\",\"95,22\",\"76,23\",\"77,23\",\"78,23\",\"79,23\",\"80,23\",\"81,23\",\"82,23\",\"83,23\",\"91,23\",\"92,23\",\"93,23\",\"94,23\",\"74,24\",\"75,24\",\"76,24\",\"77,24\",\"81,24\",\"82,24\",\"83,24\",\"84,24\",\"85,24\",\"86,24\",\"88,24\",\"89,24\",\"90,24\",\"91,24\",\"92,24\",\"93,24\",\"94,24\",\"95,24\",\"96,24\",\"97,24\",\"98,24\",\"74,25\",\"75,25\",\"81,25\",\"82,25\",\"83,25\",\"86,25\",\"87,25\",\"88,25\",\"89,25\",\"97,25\",\"74,26\",\"75,26\",\"76,26\",\"77,26\",\"78,26\",\"79,26\",\"80,26\",\"81,26\",\"85,26\",\"74,27\",\"75,27\",\"76,27\",\"77,27\",\"81,27\",\"85,27\",\"86,27\",\"90,27\",\"91,27\",\"94,27\",\"75,28\",\"76,28\",\"77,28\",\"94,28\",\"95,28\"]'
+      - name: config
+        value: "https://raw.githubusercontent.com/Akitakumala/indonesia-coastlines/refs/heads/main/configs/indonesia_coastlines_config_combined.yaml"
+      - name: overwrite
+        value: "--no-overwrite"
+  templates:
+    - name: coastlines-dag
+      dag:
+        tasks:
+          - name: generate-ids
+            template: generate
+            arguments:
+              parameters:
+                - name: config
+                  value: "{{workflow.parameters.config}}"
+                - name: tiles-subset
+                  value: "{{workflow.parameters.tiles-subset}}"
+
+          - name: process-id
+            depends: generate-ids.Succeeded
+            template: process
+            withParam: "{{tasks.generate-ids.outputs.result}}"
+            arguments:
+              parameters:
+                - name: id
+                  value: "{{item}}"
+                - name: config
+                  value: "{{workflow.parameters.config}}"
+                - name: result-version
+                  value: "{{workflow.parameters.result-version}}"
+                - name: overwrite
+                  value: "{{workflow.parameters.overwrite}}"
+
+          - name: merge
+            depends: "process-id.AnySucceeded"
+            template: merge-continental
+            arguments:
+              parameters:
+                - name: config
+                  value: "{{workflow.parameters.config}}"
+                - name: result-version
+                  value: "{{workflow.parameters.result-version}}"
+
+    - name: generate
+      inputs:
+        parameters:
+          - name: config
+          - name: tiles-subset
+      container:
+        image: 686410905891.dkr.ecr.ap-southeast-3.amazonaws.com/coastlines:{{workflow.parameters.image-tag}}
+        command: [bash, -c]
+        args:
+          - >-
+            coastlines-print-tiles
+            --config-file {{inputs.parameters.config}}
+            --config-type coastlines
+            --tiles-subset "{{inputs.parameters.tiles-subset}}"
+
+    - name: process
+      metadata:
+        labels:
+          app: "argo-coastlines-process-{{workflow.name}}"
+      inputs:
+        parameters:
+          - name: id
+          - name: config
+          - name: result-version
+          - name: overwrite
+      # retryStrategy:
+      #   limit: 2
+      #   retryPolicy: Always
+      container:
+        image: 686410905891.dkr.ecr.ap-southeast-3.amazonaws.com/coastlines:{{workflow.parameters.image-tag}}
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            memory: 200Gi
+            cpu: 14.0
+          limits:
+            cpu: 16.0
+            memory: 240Gi
+
+        volumeMounts:
+          - name: efs-coastlines-data
+            mountPath: /data/coastlines
+            readOnly: true
+
+        command: [bash, -c]
+        args:
+          - |
+            set -xe
+
+            echo "Running coastlines"
+            coastlines-combined \
+              --config-path={{inputs.parameters.config}} \
+              --study-area={{inputs.parameters.id}} \
+              --tide-data-location="/data/coastlines/tide_models/" \
+              --output-version={{inputs.parameters.result-version}} \
+              {{inputs.parameters.overwrite}}
+        env:
+          - name: ODC_DEFAULT_DB_HOSTNAME
+            value: pg-proxy-service.database.svc.cluster.local
+          - name: ODC_DEFAULT_DB_PORT
+            value: "6432"
+          - name: ODC_DEFAULT_DB_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: odc
+                key: username
+          - name: ODC_DEFAULT_DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: odc
+                key: password
+          - name: ODC_DEFAULT_DB_DATABASE
+            valueFrom:
+              secretKeyRef:
+                name: odc
+                key: username
+          - name: ODC_DEFAULT_INDEX_DRIVER
+            value: postgis
+
+    - name: merge-continental
+      metadata:
+        labels:
+          app: "argo-coastlines-merge-{{workflow.name}}"
+      inputs:
+        parameters:
+          - name: config
+          - name: result-version
+      container:
+        image: 686410905891.dkr.ecr.ap-southeast-3.amazonaws.com/coastlines:{{workflow.parameters.image-tag}}
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            memory: 120Gi
+            cpu: 4.0
+          limits:
+            cpu: 8.0
+            memory: 180Gi
+        command: [bash, -c]
+        args:
+          - |
+            coastlines-merge \
+              --config-path={{inputs.parameters.config}} \
+              --output-version={{inputs.parameters.result-version}}
