@@ -1,13 +1,13 @@
 import subprocess
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, Union
 
 import boto3
 import click
+import pandas as pd
 from dep_tools.utils import shift_negative_longitudes
 from fiona import listlayers
-import pandas as pd
 from geopandas import GeoDataFrame, read_file, read_parquet
 from odc.stac import configure_s3_access
 from s3path import S3Path
@@ -22,12 +22,11 @@ from coastlines.utils import (
     load_config,
     wms_fields,
 )
-
 from coastlines.vector import generate_hotspots
 
 
 def list_files_s3(input_location: str, suffix: str):
-    if input_location.startswith("s3://") or input_location.startswith("S3:/"):
+    if input_location.startswith(("s3://", "S3:/")):
         path = S3Path(input_location.replace("s3:/", "").replace("S3:/", ""))
     else:
         path = Path(input_location)
@@ -49,6 +48,7 @@ def find_points_contours(files: Iterable) -> list[list[S3Path], list[S3Path]]:
 
 def load_parquet_files(files: list[S3Path] | list[Path], output_crs: str):
     import concurrent.futures
+
     from tqdm import tqdm
 
     data_frames = []
@@ -91,7 +91,7 @@ def get_output_path(
     output_version: str,
     dataset_name: str,
     extension: str,
-) -> Union[Path, S3Path]:
+) -> Path | S3Path:
     path = None
     if output_location.startswith("s3://"):
         path = S3Path(output_location.replace("s3:/", ""))
@@ -120,13 +120,13 @@ def generate_pmtiles(gpkg_path: Path, output_path: Path):
         gdf.to_file(output_geojson_path)
         tippecanoe_layers.append(output_pmtile_path)
         roc_opts = " -y sig_time -y rate_time -y certainty"
-        opts = dict(
-            hotspots_zoom_1=f"-B 0 {roc_opts}",
-            hotspots_zoom_2=f"-B 4 {roc_opts}",
-            hotspots_zoom_3=f"-B 7 {roc_opts}",
-            rates_of_change=f"-B 10 {roc_opts} -y se_time",
-            shorelines_annual="-y year -y certainty",
-        )[name]
+        opts = {
+            "hotspots_zoom_1": f"-B 0 {roc_opts}",
+            "hotspots_zoom_2": f"-B 4 {roc_opts}",
+            "hotspots_zoom_3": f"-B 7 {roc_opts}",
+            "rates_of_change": f"-B 10 {roc_opts} -y se_time",
+            "shorelines_annual": "-y year -y certainty",
+        }[name]
         subprocess.run(
             ["tippecanoe", *opts.split(), "-pi", "-z13", "-f",
             "-o", str(output_pmtile_path), "-L", f"{name}:{output_geojson_path}"],

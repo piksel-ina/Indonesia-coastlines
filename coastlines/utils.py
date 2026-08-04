@@ -1,13 +1,15 @@
 import json
 import logging
 from pathlib import Path
-from typing import Union
 
 import click
 import fsspec
 import geopandas as gpd
 import pandas as pd
+from dea_tools.spatial import subpixel_contours
 from geopandas import GeoDataFrame
+from odc.geo.geom import Geometry
+from odc.geo.gridspec import GeoBox, GridSpec
 from odc.stac import load
 from planetary_computer import sign_url
 from pystac_client import Client
@@ -15,13 +17,7 @@ from s3path import S3Path
 from xarray import Dataset
 from yaml import safe_load
 
-from odc.geo.gridspec import GridSpec, GeoBox
-from odc.geo.geom import Geometry
-
-from coastlines.config import CoastlinesConfig
-from coastlines.config import IntertidalConfig
-
-from dea_tools.spatial import subpixel_contours
+from coastlines.config import CoastlinesConfig, IntertidalConfig
 
 STYLES_FILE = Path(__file__).parent / "styles.csv"
 
@@ -31,7 +27,7 @@ class CoastlinesException(Exception):
     pass
 
 
-def is_s3(path: Union[Path, S3Path]) -> bool:
+def is_s3(path: Path | S3Path) -> bool:
     """
     Check if a path is an S3 path.
     """
@@ -107,7 +103,7 @@ def get_study_geobox_from_grid(study_area: str, gridspec: GridSpec) -> GeoBox:
 
 
 def get_study_geometry_from_grid(
-    study_area: str, gridspec: GridSpec, buffer: int | float | None = None
+    study_area: str, gridspec: GridSpec, buffer: float | None = None
 ) -> GeoDataFrame:
     geobox = gridspec.tile_geobox(tile_index=study_area)
 
@@ -297,14 +293,14 @@ def wms_fields(gdf):
     """
 
     wms_fields = pd.DataFrame(
-        dict(
-            wms_abs=gdf.rate_time.abs(),
-            wms_conf=gdf.se_time * 1.96,
-            wms_grew=gdf.rate_time < 0,
-            wms_retr=gdf.rate_time > 0,
-            wms_sig=gdf.sig_time <= 0.01,
-            wms_good=gdf.certainty == "good",
-        )
+        {
+            "wms_abs": gdf.rate_time.abs(),
+            "wms_conf": gdf.se_time * 1.96,
+            "wms_grew": gdf.rate_time < 0,
+            "wms_retr": gdf.rate_time > 0,
+            "wms_sig": gdf.sig_time <= 0.01,
+            "wms_good": gdf.certainty == "good",
+        }
     )
 
     return wms_fields

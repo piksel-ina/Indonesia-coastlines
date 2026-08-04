@@ -1,22 +1,21 @@
 import os
 import sys
 from pathlib import Path
-from typing import Union
 
 import boto3
 import click
-import xarray as xr
 import numpy as np
+import xarray as xr
 from datacube.utils.dask import start_local_dask
 from datacube.utils.geometry import Geometry
-from dep_tools.aws import write_stac_s3, object_exists
+from dep_tools.aws import object_exists, write_stac_s3
 from dep_tools.namers import S3ItemPath
 from dep_tools.stac_utils import StacCreator, set_stac_properties
 from dep_tools.writers import AwsDsCogWriter
 from intertidal.elevation import elevation
 from intertidal.exposure import exposure
-from intertidal.tidal_bias_offset import bias_offset
 from intertidal.io import prepare_for_export
+from intertidal.tidal_bias_offset import bias_offset
 from odc.stac import configure_s3_access, load
 from pystac_client import Client
 from s3path import S3Path
@@ -52,7 +51,7 @@ def get_output_path(
     tile_id: str,
     dataset_name: str,
     extension: str,
-) -> Union[Path, S3Path]:
+) -> Path | S3Path:
     path = None
     if output_location.startswith("s3://"):
         path = S3Path(output_location.replace("s3:/", ""))
@@ -339,7 +338,7 @@ def process_intertidal(
         itempath=itempath,
         overwrite=True,
         convert_to_int16=False,
-        extra_attrs=dict(dep_version=output_version),
+        extra_attrs={"dep_version": output_version},
         write_multithreaded=True,
         client=aws_client,
     )
@@ -462,8 +461,8 @@ def cli(
             log,
             overwrite=overwrite,
         )
-    except CoastlinesException as e:
-        log.exception(f"Study area {study_area}: Failed to run process with error {e}")
+    except CoastlinesException:
+        log.exception(f"Study area {study_area}: Failed to run process with error")
         sys.exit(1)
 
 
