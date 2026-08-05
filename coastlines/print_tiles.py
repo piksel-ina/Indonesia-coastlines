@@ -15,9 +15,10 @@ def read_tiles_subset_string(tiles_subset: str) -> list:
 @click.option("--config-file", type=str)
 @click.option("--config-type", type=str)
 @click.option("--tiles-subset", type=str, default="[]")
+@click.option("--tiles-exclude", type=str, default="[]")
 @click.option("--limit", type=int, default=None, required=False)
 def cli(
-    config_file: str, config_type: str, tiles_subset: str, limit: int | None
+    config_file: str, config_type: str, tiles_subset: str, tiles_exclude: str, limit: int | None
 ) -> None:
     config = load_config(config_file, config_type)
     tiles = load_json(config.input.grid_path)
@@ -28,12 +29,24 @@ def cli(
         print(f"Tiles subset '{tiles_subset}' is not a valid JSON string")
         sys.exit(1)
 
+    try:
+        exclude_list = read_tiles_subset_string(tiles_exclude)
+    except JSONDecodeError:
+        print(f"Tiles exclude '{tiles_exclude}' is not a valid JSON string")
+        sys.exit(1)
+
     if len(subset_list) != 0:
         try:
             tiles = tiles.loc[subset_list]
         except KeyError:
             print("One or more tile keys was not found in the grid file")
             sys.exit(1)
+
+    if len(exclude_list) != 0:
+        missing = set(exclude_list) - set(tiles.index)
+        if missing:
+            print(f"Warning: tile keys to exclude not found in grid file, ignoring: {sorted(missing)}")
+        tiles = tiles.drop(exclude_list, errors="ignore")
 
     if limit is not None:
         tiles = tiles[:limit]
