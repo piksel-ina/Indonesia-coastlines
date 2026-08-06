@@ -4,6 +4,7 @@ from collections import Counter, namedtuple
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import cast
 
 import click
 import geopandas as gpd
@@ -18,6 +19,7 @@ from odc.geo.geom import Geometry
 from odc.stac import configure_s3_access, load
 from pystac_client import Client
 from s3path import S3Path
+from shapely.geometry import MultiPolygon, Polygon
 
 from coastlines.config import CoastlinesConfig
 
@@ -896,12 +898,33 @@ def process_coastlines(
     )
 
     # Clip to the study area
+    # Guard against missing CRS rather than silently mis-clipping
+    if contours_with_certainty.crs is None:
+        raise CoastlinesException(
+            f"Study area {study_area}: contours have no CRS set, cannot clip"
+        )
+    if points_with_certainty.crs is None:
+        raise CoastlinesException(
+            f"Study area {study_area}: points have no CRS set, cannot clip"
+        )
+    clip_geom_points = cast(
+        "Polygon | MultiPolygon", geometry.to_crs(points_with_certainty.crs).geom
+    )
+    clip_geom_contours = cast(
+        "Polygon | MultiPolygon", geometry.to_crs(contours_with_certainty.crs).geom
+    )
+
     points_with_certainty = points_with_certainty.clip(
-        geometry.to_crs(points_with_certainty.crs).geom
+        clip_geom_points, keep_geom_type=True,
     )
     contours_with_certainty = contours_with_certainty.clip(
-        geometry.to_crs(contours_with_certainty.crs).geom
+        clip_geom_contours, keep_geom_type=True,
     )
+
+    if len(contours_with_certainty) == 0:
+        raise CoastlinesException(
+            f"Study area {study_area}: no valid contour geometry remains after clipping"
+        )
 
     # Write results
     log.info(f"Writing to files to {output_location}")

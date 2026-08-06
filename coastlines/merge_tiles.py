@@ -307,7 +307,9 @@ def cli(config_path, output_version, local_write, create_pmtiles):
         raise CoastlinesException("No points or contours files found")
 
     log.info("Loading files into memory...")
+    log.info("Loading points into memory...")
     rates_of_change = load_parquet_files(points_files, config.output.crs)
+    log.info("Loading contours into memory...")
     shorelines = load_parquet_files(contours_files, config.output.crs)
 
     # Add the WMS fields to the rates of change data

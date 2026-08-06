@@ -412,7 +412,7 @@ def certainty_masking(yearly_ds, obs_threshold=5, stdev_threshold=0.3, sieve_siz
     return vector_masks
 
 
-def contour_certainty(contours_gdf, certainty_masks):
+def contour_certainty(contours_gdf, certainty_masks) -> GeoDataFrame:
     """
     Assigns a new certainty column to each annual shoreline feature
     to identify features affected by:
