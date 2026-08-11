@@ -84,6 +84,7 @@ setup_kwargs = {
             "coastlines-print-tiles = coastlines.print_tiles:cli",
             "coastlines-combined = coastlines.combined:cli",
             "coastlines-merge = coastlines.merge_tiles:cli",
+            "coastlines-create-pmtiles = coastlines.create_pmtiles:cli",
             "intertidal = coastlines.intertidal:cli",
         ]
     },

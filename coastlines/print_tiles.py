@@ -26,26 +26,26 @@ def cli(
     try:
         subset_list = read_tiles_subset_string(tiles_subset)
     except JSONDecodeError:
-        print(f"Tiles subset '{tiles_subset}' is not a valid JSON string")
+        print(f"Tiles subset '{tiles_subset}' is not a valid JSON string", file=sys.stderr)
         sys.exit(1)
 
     try:
         exclude_list = read_tiles_subset_string(tiles_exclude)
     except JSONDecodeError:
-        print(f"Tiles exclude '{tiles_exclude}' is not a valid JSON string")
+        print(f"Tiles exclude '{tiles_exclude}' is not a valid JSON string", file=sys.stderr)
         sys.exit(1)
 
     if len(subset_list) != 0:
         try:
             tiles = tiles.loc[subset_list]
         except KeyError:
-            print("One or more tile keys was not found in the grid file")
+            print("One or more tile keys was not found in the grid file", file=sys.stderr)
             sys.exit(1)
 
     if len(exclude_list) != 0:
         missing = set(exclude_list) - set(tiles.index)
         if missing:
-            print(f"Warning: tile keys to exclude not found in grid file, ignoring: {sorted(missing)}")
+            print(f"Warning: tile keys to exclude not found in grid file, ignoring: {sorted(missing)}", file=sys.stderr)
         tiles = tiles.drop(exclude_list, errors="ignore")
 
     if limit is not None:
