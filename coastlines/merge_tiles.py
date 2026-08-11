@@ -1,4 +1,3 @@
-import subprocess
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
@@ -6,8 +5,6 @@ from pathlib import Path
 import boto3
 import click
 import pandas as pd
-from dep_tools.utils import shift_negative_longitudes
-from fiona import listlayers
 from geopandas import GeoDataFrame, read_file, read_parquet
 from odc.stac import configure_s3_access
 from s3path import S3Path
@@ -103,48 +100,12 @@ def get_output_path(
     return output_path
 
 
-def generate_pmtiles(gpkg_path: Path, output_path: Path):
-    layers = {
-        layer_name: read_file(
-            gpkg_path, layer=layer_name, engine="pyogrio", use_arrow=True
-        )
-        for layer_name in listlayers(gpkg_path)
-        if layer_name != "layer_styles"
-    }
-    tippecanoe_layers: list[Path] = []
-    for name, gdf in layers.items():
-        gdf = gdf.to_crs(4326)
-        gdf["geometry"] = gdf.geometry.apply(shift_negative_longitudes) # Not needed for non-Antimeridian-crossing countries.
-        output_geojson_path = output_path.parent / f"{output_path.stem}_{name}.geojson"
-        output_pmtile_path = output_path.parent / f"{output_path.stem}_{name}.pmtiles"
-        gdf.to_file(output_geojson_path)
-        tippecanoe_layers.append(output_pmtile_path)
-        roc_opts = " -y sig_time -y rate_time -y certainty"
-        opts = {
-            "hotspots_zoom_1": f"-B 0 {roc_opts}",
-            "hotspots_zoom_2": f"-B 4 {roc_opts}",
-            "hotspots_zoom_3": f"-B 7 {roc_opts}",
-            "rates_of_change": f"-B 10 {roc_opts} -y se_time",
-            "shorelines_annual": "-y year -y certainty",
-        }[name]
-        subprocess.run(
-            ["tippecanoe", *opts.split(), "-pi", "-z13", "-f",
-            "-o", str(output_pmtile_path), "-L", f"{name}:{output_geojson_path}"],
-            check=True,
-        )
-
-    subprocess.run(
-        ["tile-join", "-f", "-pk", "-o", str(output_path), *[str(p) for p in tippecanoe_layers]],
-        check=True,
-    )
-
 def write_files(
     rates_of_change: GeoDataFrame,
     shorelines: GeoDataFrame,
     hotspots: GeoDataFrame,
     output_location: str,
     output_version: str,
-    create_pmtiles: bool,
     write_parquet: bool = False,
 ) -> list[str]:
     # Destination files
@@ -203,7 +164,7 @@ def write_files(
 
             written.append(output_hotspot)
 
-    # Write geopackage
+    # Write geopackage (can't be written directly to S3)
     with tempfile.TemporaryDirectory() as tmpdir:
         # Write to a temporary file first
         temp_geopackage = f"{tmpdir}/coastlines_{output_version}.gpkg"
@@ -221,15 +182,6 @@ def write_files(
         styles = read_file(STYLES_FILE, GEOM_POSSIBLE_NAMES="geometry")
         styles.to_file(temp_geopackage, layer="layer_styles", driver="GPKG")
 
-        # Create PMTiles if requested
-        if create_pmtiles:
-            # Generate PMTiles from the temporary geopackage to a temporary pmtiles file
-            temp_pmtiles = temp_geopackage.replace(".gpkg", ".pmtiles")
-            generate_pmtiles(Path(temp_geopackage), Path(temp_pmtiles))
-
-        output_pmtiles = get_output_path(
-            output_location, output_version, "coastlines", "pmtiles"
-        )
         # Move the tempfiles to its final destination
         if write_to_s3:
             s3 = boto3.client("s3")
@@ -237,18 +189,10 @@ def write_files(
                 temp_geopackage, output_geopackage.bucket, output_geopackage.key
             )
             written.append(f"s3:/{output_geopackage}")
-            if create_pmtiles:
-                s3.upload_file(
-                    temp_pmtiles, output_pmtiles.bucket, output_pmtiles.key
-                )
-                written.append(f"s3:/{output_pmtiles}")
         else:
             output_geopackage.parent.mkdir(parents=True, exist_ok=True)
             Path(temp_geopackage).rename(output_geopackage)
             written.append(output_geopackage)
-            if create_pmtiles:
-                Path(temp_pmtiles).rename(output_pmtiles)
-                written.append(output_pmtiles)
 
     return written
 
@@ -257,19 +201,14 @@ def write_files(
 @click_config_path
 @click_output_version
 # Add --local-out flag if we want to write to local instead of s3
+# TODO: write_parquet is never passed. Either make it an option, or remove it.
 @click.option(
     "--local-write",
     is_flag=True,
     default=False,
     help="Whether to write the output files to local storage instead of S3.",
 )
-@click.option(
-    "--create-pmtiles",
-    is_flag=True,
-    default=True,
-    help="Whether to create PMTiles from the merged data.",
-)
-def cli(config_path, output_version, local_write, create_pmtiles):
+def cli(config_path, output_version, local_write):
     # Set up
     config = load_config(config_path, "coastlines")
     log = configure_logging()
@@ -327,7 +266,6 @@ def cli(config_path, output_version, local_write, create_pmtiles):
     )
 
     log.info("Writing files")
-    log.info("Creating PMTiles" if create_pmtiles else "Not creating PMTiles")
 
     output_location = config.output.location
     if local_write:
@@ -338,7 +276,6 @@ def cli(config_path, output_version, local_write, create_pmtiles):
         hotspots,
         output_location,
         output_version,
-        create_pmtiles,
     )
 
     for file in written:
