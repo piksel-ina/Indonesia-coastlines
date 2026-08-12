@@ -15,7 +15,7 @@ spec:
       karpenter.sh/do-not-disrupt: "true"
   nodeSelector:
     data-production: r8xlarge
-    # karpenter.sh/capacity-type: on-demand # Needed for merge step
+    # karpenter.sh/capacity-type: on-demand # Needed for merge step because it runs for 15.5 hours.
   tolerations:
     - key: data-production
       operator: Equal
@@ -222,11 +222,11 @@ spec:
           requests:
             memory: 16Gi
             cpu: 2.0
-            ephemeral-storage: 10Gi # For temp files
+            ephemeral-storage: 25Gi # For temp files
           limits:
             cpu: 4.0
             memory: 32Gi
-            ephemeral-storage: 15Gi # For temp files
+            ephemeral-storage: 30Gi # For temp files. 15Gi failed in 30 mins. Can't schedule more than 30Gi.
         command: [bash, -c]
         args:
           - |

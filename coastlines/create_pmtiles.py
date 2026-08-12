@@ -45,9 +45,25 @@ def generate_pmtiles(gpkg_path: Path, output_path: Path):
              "-o", str(output_pmtile_path), "-L", f"{name}:{output_geojson_path}"],
             check=True,
         )
+
+        # TODO: Pipe the geojson directly to tippecanoe instead of writing to disk first. This will save disk space (ephemeral-storage) and time.
+        # ogr_proc = subprocess.Popen(
+        #     ["ogr2ogr", "-f", "GeoJSON", "-t_srs", "EPSG:4326", "/vsistdout/", str(gpkg_path), name],
+        #     stdout=subprocess.PIPE,
+        # )
+        # subprocess.run(
+        #     ["tippecanoe", *opts.split(), "-pi", "-z13", "-f",
+        #     "-o", str(output_pmtile_path), "-L", f"{name}:-"],
+        #     stdin=ogr_proc.stdout,
+        #     check=True,
+        # )
+        # ogr_proc.stdout.close()
+        # ogr_proc.wait()
+
         output_geojson_path.unlink() # Free disk as soon as tippecanoe is done with it
         tippecanoe_layers.append(output_pmtile_path)
 
+    gpkg_path.unlink() # Free before the tile-join peak
     subprocess.run(
         ["tile-join", "-f", "-pk", "-o", str(output_path), *[str(p) for p in tippecanoe_layers]],
         check=True,
